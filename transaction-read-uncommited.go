@@ -4,77 +4,90 @@ type TransactionReadUncommitted[TValue valueConstraint] struct {
 	changes []readUncommittedChange[TValue]
 }
 
-func (t *TransactionReadUncommitted[TValue]) Take(account Account[TValue], value TValue) *Take[TValue] {
+func (t *TransactionReadUncommitted[TValue]) Take(amount IAmount[TValue], value TValue) *Take[TValue] {
 	t.lazyInit()
-	take := account.GetAmount().Take(value)
+
+	amount.Lock()
+	take := amount.Take(value)
+	amount.Unlock()
 
 	t.changes = append(t.changes, readUncommittedChange[TValue]{
-		amount: account.GetAmount(),
+		amount: amount,
 		take:   take,
 	})
 
 	return take
 }
 
-func (t *TransactionReadUncommitted[TValue]) TakeIfEnough(account Account[TValue], value TValue) (amountTaken TValue) {
+func (t *TransactionReadUncommitted[TValue]) TakeIfEnough(amount IAmount[TValue], value TValue) (amountTaken TValue) {
 	t.lazyInit()
 
-	amountTaken = account.GetAmount().TakeIfEnough(value)
+	amount.Lock()
+	amountTaken = amount.TakeIfEnough(value)
+	amount.Unlock()
 
 	t.changes = append(t.changes, readUncommittedChange[TValue]{
-		amount: account.GetAmount(),
+		amount: amount,
 		value:  -amountTaken,
 	})
 
 	return
 }
 
-func (t *TransactionReadUncommitted[TValue]) TakeAsMuch(account Account[TValue], value TValue) (amountTaken TValue) {
+func (t *TransactionReadUncommitted[TValue]) TakeAsMuch(amount IAmount[TValue], value TValue) (amountTaken TValue) {
 	t.lazyInit()
 
-	amountTaken = account.GetAmount().TakeAsMuch(value)
+	amount.Lock()
+	amountTaken = amount.TakeAsMuch(value)
+	amount.Unlock()
 
 	t.changes = append(t.changes, readUncommittedChange[TValue]{
-		amount: account.GetAmount(),
+		amount: amount,
 		value:  -amountTaken,
 	})
 
 	return
 }
 
-func (t *TransactionReadUncommitted[TValue]) TakeForce(account Account[TValue], value TValue) (amountTaken TValue) {
+func (t *TransactionReadUncommitted[TValue]) TakeForce(amount IAmount[TValue], value TValue) (amountTaken TValue) {
 	t.lazyInit()
 
-	amountTaken = account.GetAmount().TakeForce(value)
+	amount.Lock()
+	amountTaken = amount.TakeForce(value)
+	amount.Unlock()
 
 	t.changes = append(t.changes, readUncommittedChange[TValue]{
-		amount: account.GetAmount(),
+		amount: amount,
 		value:  -amountTaken,
 	})
 
 	return
 }
 
-func (t *TransactionReadUncommitted[TValue]) Change(account Account[TValue], value TValue) {
+func (t *TransactionReadUncommitted[TValue]) Change(amount IAmount[TValue], value TValue) {
 	t.lazyInit()
 
-	account.GetAmount().Change(value)
+	amount.Lock()
+	amount.Change(value)
+	amount.Unlock()
 
 	t.changes = append(t.changes, readUncommittedChange[TValue]{
-		amount: account.GetAmount(),
+		amount: amount,
 		value:  value,
 	})
 
 	return
 }
 
-func (t *TransactionReadUncommitted[TValue]) Put(account Account[TValue], value TValue) (amountPut TValue) {
+func (t *TransactionReadUncommitted[TValue]) Put(amount IAmount[TValue], value TValue) (amountPut TValue) {
 	t.lazyInit()
 
-	amountPut = account.GetAmount().Put(value)
+	amount.Lock()
+	amountPut = amount.Put(value)
+	amount.Unlock()
 
 	t.changes = append(t.changes, readUncommittedChange[TValue]{
-		amount: account.GetAmount(),
+		amount: amount,
 		value:  amountPut,
 	})
 
@@ -92,12 +105,14 @@ func (t *TransactionReadUncommitted[TValue]) Rollback() {
 
 	for _, change := range t.changes {
 		if nil == change.take {
-			change.amount.change(-change.value)
+			change.amount.Lock()
+			change.amount.Change(-change.value)
+			change.amount.Unlock()
 
 			continue
 		}
 
-		if change.take.FinishAndGetResult() {
+		if change.take.amount.FinishTake(change.take) {
 			change.amount.Put(change.take.taken)
 		}
 	}
@@ -106,7 +121,7 @@ func (t *TransactionReadUncommitted[TValue]) Rollback() {
 }
 
 type readUncommittedChange[TValue valueConstraint] struct {
-	amount *Amount[TValue]
+	amount IAmount[TValue]
 	take   *Take[TValue]
 	value  TValue
 }

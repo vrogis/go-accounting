@@ -14,48 +14,28 @@ type Take[TValue valueConstraint] struct {
 	successEvent event.Event[TValue]
 	want         TValue
 	taken        TValue
-	result       bool
+	success      bool
 }
 
-func makeWaitingTake[TValue valueConstraint](amount *Amount[TValue], want TValue) *Take[TValue] {
-	return &Take[TValue]{
-		amount: amount,
-		taken:  amount.value,
-		want:   want,
-	}
-}
+func (take *Take[TValue]) Want() TValue {
+	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-func makeSuccessTake[TValue valueConstraint](amount *Amount[TValue], amountWant TValue) *Take[TValue] {
-	return &Take[TValue]{
-		amount: amount,
-		want:   amountWant,
-		taken:  amountWant,
-		result: true,
-	}
-}
-
-func (take *Take[TValue]) Amount() *Amount[TValue] {
-	return take.amount
+	return take.want
 }
 
 func (take *Take[TValue]) Left() TValue {
 	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-	amountLeft := take.want - take.taken
-
-	take.mtx.Unlock()
-
-	return amountLeft
+	return take.want - take.taken
 }
 
 func (take *Take[TValue]) Taken() TValue {
 	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-	taken := take.taken
-
-	take.mtx.Unlock()
-
-	return taken
+	return take.taken
 }
 
 func (take *Take[TValue]) OnSuccess(success event.Subscriber[TValue]) {
@@ -69,79 +49,78 @@ func (take *Take[TValue]) OnSuccess(success event.Subscriber[TValue]) {
 		return
 	}
 
-	if take.result {
-		take.mtx.Unlock()
+	take.mtx.Unlock()
 
+	if take.success {
 		success(take.taken)
 	}
 }
 
-func (take *Take[TValue]) OnWaiting(onWaiting func(*Take[TValue]), interval time.Duration) {
-	go func() {
-		for {
-			take.mtx.Lock()
+func (take *Take[TValue]) WaitChan() <-chan struct{} {
+	finished := make(chan struct{})
 
-			if take.hasResult() {
-				take.mtx.Unlock()
+	if take.IsFinished() {
+		close(finished)
 
-				return
-			}
-
-			take.mtx.Unlock()
-
-			onWaiting(take)
-
-			time.Sleep(interval)
-		}
-	}()
-}
-
-func (take *Take[TValue]) FinishAndGetResult() (result bool) {
-	take.mtx.Lock()
-
-	if take.hasResult() {
-		defer take.mtx.Unlock()
-
-		return take.result
+		return finished
 	}
 
-	element := take.element
-	taken := take.taken
+	take.OnSuccess(func(_ TValue) {
+		close(finished)
+	})
 
-	take.setResult(false)
+	return finished
+}
 
-	take.taken = 0
+func (take *Take[TValue]) Waiting(waitFor time.Duration, onWaiting func(*Take[TValue]), interval time.Duration) {
+	var timeEnd func() bool
 
-	take.mtx.Unlock()
+	if waitFor >= 0 {
+		start := time.Now()
+		end := start.Add(waitFor)
 
-	take.amount.Lock()
+		timeEnd = func() bool {
+			return start.After(end) || start.Equal(end)
+		}
+	} else {
+		timeEnd = func() bool {
+			return false
+		}
+	}
 
-	take.amount.waitingTakes.Remove(element)
-	take.amount.value += taken
+	for {
+		take.mtx.Lock()
 
-	take.amount.Unlock()
+		if take.hasResult() {
+			take.mtx.Unlock()
 
-	return false
+			return
+		}
+
+		take.mtx.Unlock()
+
+		onWaiting(take)
+
+		if timeEnd() {
+			return
+		}
+
+		time.Sleep(interval)
+	}
 }
 
 func (take *Take[TValue]) IsFinished() bool {
 	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-	hasResult := take.hasResult()
-
-	take.mtx.Unlock()
-
-	return hasResult
+	return take.hasResult()
 }
 
 func (take *Take[TValue]) IsSuccess() bool {
 	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-	result := take.result
-
-	take.mtx.Unlock()
-
-	return result
+	return take.success
 }
 
 func (take *Take[TValue]) put(amount TValue) (taken TValue, full bool) {
@@ -157,18 +136,35 @@ func (take *Take[TValue]) put(amount TValue) (taken TValue, full bool) {
 
 	take.taken = take.want
 
-	take.setResult(true)
+	take.finish(true)
 
 	take.successEvent.Trigger(take.taken)
 
 	return taken, true
 }
 
+func makeWaitingTake[TValue valueConstraint](amount *Amount[TValue], taken TValue, want TValue) *Take[TValue] {
+	return &Take[TValue]{
+		amount: amount,
+		taken:  taken,
+		want:   want,
+	}
+}
+
+func makeSuccessTake[TValue valueConstraint](amount *Amount[TValue], want TValue) *Take[TValue] {
+	return &Take[TValue]{
+		amount:  amount,
+		want:    want,
+		taken:   want,
+		success: true,
+	}
+}
+
 func (take *Take[TValue]) hasResult() bool {
 	return nil == take.element
 }
 
-func (take *Take[TValue]) setResult(result bool) {
+func (take *Take[TValue]) finish(success bool) {
 	take.element = nil
-	take.result = result
+	take.success = success
 }

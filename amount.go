@@ -5,6 +5,19 @@ import (
 	"sync"
 )
 
+type IAmount[TValue valueConstraint] interface {
+	sync.Locker
+	Available() TValue
+	Full() TValue
+	Take(value TValue) *Take[TValue]
+	FinishTake(take *Take[TValue]) (success bool)
+	TakeIfEnough(value TValue) (amountTaken TValue)
+	TakeAsMuch(value TValue) (amountTaken TValue)
+	TakeForce(value TValue) TValue
+	Change(value TValue)
+	Put(value TValue) TValue
+}
+
 type Amount[TValue valueConstraint] struct {
 	sync.Mutex
 	value        TValue
@@ -15,12 +28,16 @@ type valueConstraint interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~float32 | ~float64
 }
 
-func (a *Amount[TValue]) Value() TValue {
-	a.Lock()
+func (a *Amount[TValue]) Available() TValue {
+	return a.value
+}
 
+func (a *Amount[TValue]) Full() TValue {
 	value := a.value
 
-	a.Unlock()
+	for it := a.waitingTakes.Front(); it != nil; it = it.Next() {
+		value += it.Value.(*Take[TValue]).taken
+	}
 
 	return value
 }
@@ -34,35 +51,48 @@ func (a *Amount[TValue]) Take(value TValue) *Take[TValue] {
 		value = -value
 	}
 
-	a.Lock()
-
 	newAmount := a.value - value
 
 	if newAmount >= 0 {
 		a.value = newAmount
 
-		a.Unlock()
-
-		return makeSuccessTake(a, value)
+		return makeSuccessTake[TValue](a, value)
 	}
 
-	var amountWant TValue
+	var amountTaken TValue
 
-	if a.value <= 0 {
-		amountWant = value
-	} else {
-		amountWant = -newAmount
+	if a.value > 0 {
+		amountTaken = a.value
 	}
 
-	take := makeWaitingTake(a, amountWant)
+	take := makeWaitingTake[TValue](a, amountTaken, value)
 
 	take.element = a.waitingTakes.PushBack(take)
 
 	a.value = 0
 
-	a.Unlock()
-
 	return take
+}
+
+func (a *Amount[TValue]) FinishTake(take *Take[TValue]) (success bool) {
+	take.mtx.Lock()
+	defer take.mtx.Unlock()
+
+	if take.hasResult() {
+		return take.success
+	}
+
+	element := take.element
+	taken := take.taken
+
+	take.finish(false)
+
+	take.taken = 0
+
+	a.waitingTakes.Remove(element)
+	a.value += taken
+
+	return false
 }
 
 func (a *Amount[TValue]) TakeIfEnough(value TValue) (amountTaken TValue) {
@@ -74,19 +104,13 @@ func (a *Amount[TValue]) TakeIfEnough(value TValue) (amountTaken TValue) {
 		value = -value
 	}
 
-	a.Lock()
-
 	newAmount := a.value - value
 
 	if newAmount >= 0 {
 		a.value = newAmount
 
-		a.Unlock()
-
 		return value
 	}
-
-	a.Unlock()
 
 	return value
 }
@@ -100,8 +124,6 @@ func (a *Amount[TValue]) TakeAsMuch(value TValue) (amountTaken TValue) {
 		value = -value
 	}
 
-	a.Lock()
-
 	if a.value <= 0 {
 		return 0
 	}
@@ -113,14 +135,10 @@ func (a *Amount[TValue]) TakeAsMuch(value TValue) (amountTaken TValue) {
 
 		a.value -= amountTaken
 
-		a.Unlock()
-
 		return
 	}
 
 	a.value -= value
-
-	a.Unlock()
 
 	return value
 }
@@ -134,21 +152,25 @@ func (a *Amount[TValue]) TakeForce(value TValue) TValue {
 		value = -value
 	}
 
-	a.Lock()
-
 	a.value -= value
-
-	a.Unlock()
 
 	return value
 }
 
 func (a *Amount[TValue]) Change(value TValue) {
-	a.Lock()
+	if 0 == value {
+		return
+	}
 
-	a.change(value)
+	if value > 0 {
+		a.put(value)
 
-	a.Unlock()
+		return
+	}
+
+	a.value += value
+
+	return
 }
 
 func (a *Amount[TValue]) Put(value TValue) TValue {
@@ -160,27 +182,7 @@ func (a *Amount[TValue]) Put(value TValue) TValue {
 		value = -value
 	}
 
-	a.Lock()
-
 	a.put(value)
-
-	a.Unlock()
-
-	return value
-}
-
-func (a *Amount[TValue]) change(value TValue) TValue {
-	if 0 == value {
-		return 0
-	}
-
-	if value > 0 {
-		a.put(value)
-
-		return value
-	}
-
-	a.value += value
 
 	return value
 }

@@ -1,66 +1,61 @@
 package accounting
 
 import (
-	"sort"
-	"unsafe"
+	"github.com/vrogis/go-lock"
 )
 
 type TransactionAggregated[TValue valueConstraint] struct {
-	changesIdx map[*Amount[TValue]]*aggregatedChange[TValue]
+	changesIdx map[IAmount[TValue]]*aggregatedChange[TValue]
 	changes    []*aggregatedChange[TValue]
 }
 
 type aggregatedChange[TValue valueConstraint] struct {
-	amount     *Amount[TValue]
-	amountPtr  uintptr
+	amount     IAmount[TValue]
 	value      TValue
 	changeFunc func() error
 }
 
-func (t *TransactionAggregated[TValue]) Change(account Account[TValue], value TValue) {
+func (a *aggregatedChange[TValue]) Lock() {
+	a.amount.Lock()
+}
+
+func (a *aggregatedChange[TValue]) Unlock() {
+	a.amount.Unlock()
+}
+
+func (t *TransactionAggregated[TValue]) Change(amount IAmount[TValue], value TValue) {
 	t.lazyInit()
 
-	if existingChange, ok := t.changesIdx[account.GetAmount()]; ok {
+	if existingChange, ok := t.changesIdx[amount]; ok {
 		existingChange.value += value
 
 		return
 	}
 
-	amount := account.GetAmount()
-
 	newChange := &aggregatedChange[TValue]{
-		amount:    amount,
-		amountPtr: uintptr(unsafe.Pointer(account.GetAmount())),
-		value:     value,
+		amount: amount,
+		value:  value,
 		changeFunc: func() error {
-			amount.change(value)
+			amount.Change(value)
 
 			return nil
 		},
 	}
 
-	t.changesIdx[account.GetAmount()] = newChange
+	t.changesIdx[amount] = newChange
 	t.changes = append(t.changes, newChange)
 }
 
 func (t *TransactionAggregated[TValue]) Commit() {
 	t.lazyInit()
 
-	sort.Slice(t.changes, func(i, j int) bool {
-		return t.changes[i].amountPtr < t.changes[j].amountPtr
-	})
+	unlock := lock.Acquire(t.changes...)
 
 	for _, changeMade := range t.changes {
-		changeMade.amount.Lock()
+		changeMade.amount.Change(changeMade.value)
 	}
 
-	for _, changeMade := range t.changes {
-		changeMade.amount.change(changeMade.value)
-	}
-
-	for _, changeMade := range t.changes {
-		changeMade.amount.Unlock()
-	}
+	unlock()
 
 	t.reset()
 }
@@ -76,6 +71,6 @@ func (t *TransactionAggregated[TValue]) lazyInit() {
 }
 
 func (t *TransactionAggregated[TValue]) reset() {
-	t.changesIdx = make(map[*Amount[TValue]]*aggregatedChange[TValue])
+	t.changesIdx = make(map[IAmount[TValue]]*aggregatedChange[TValue])
 	t.changes = make([]*aggregatedChange[TValue], 0)
 }
