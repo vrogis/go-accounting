@@ -8,13 +8,13 @@ import (
 )
 
 type Take[TValue valueConstraint] struct {
-	mtx          sync.Mutex
-	amount       *Amount[TValue]
-	element      *list.Element
-	successEvent event.Event[TValue]
-	want         TValue
-	taken        TValue
-	success      bool
+	mtx         sync.Mutex
+	amount      *Amount[TValue]
+	element     *list.Element
+	finishEvent event.Event[TValue]
+	want        TValue
+	taken       TValue
+	success     bool
 }
 
 func (take *Take[TValue]) Want() TValue {
@@ -38,22 +38,20 @@ func (take *Take[TValue]) Taken() TValue {
 	return take.taken
 }
 
-func (take *Take[TValue]) OnSuccess(success event.Subscriber[TValue]) {
+func (take *Take[TValue]) OnFinish(subscriber event.Subscriber[TValue]) {
 	take.mtx.Lock()
 
 	if !take.hasResult() {
 		take.mtx.Unlock()
 
-		take.successEvent.On(success)
+		take.finishEvent.On(subscriber)
 
 		return
 	}
 
 	take.mtx.Unlock()
 
-	if take.success {
-		success(take.taken)
-	}
+	subscriber(take.taken)
 }
 
 func (take *Take[TValue]) WaitChan() <-chan struct{} {
@@ -65,7 +63,7 @@ func (take *Take[TValue]) WaitChan() <-chan struct{} {
 		return finished
 	}
 
-	take.OnSuccess(func(_ TValue) {
+	take.OnFinish(func(_ TValue) {
 		close(finished)
 	})
 
@@ -73,17 +71,16 @@ func (take *Take[TValue]) WaitChan() <-chan struct{} {
 }
 
 func (take *Take[TValue]) Waiting(waitFor time.Duration, onWaiting func(*Take[TValue]), interval time.Duration) {
-	var timeEnd func() bool
+	var timeIsOver func() bool
 
 	if waitFor >= 0 {
-		start := time.Now()
-		end := start.Add(waitFor)
+		end := time.Now().Add(waitFor)
 
-		timeEnd = func() bool {
-			return start.After(end) || start.Equal(end)
+		timeIsOver = func() bool {
+			return !time.Now().Before(end)
 		}
 	} else {
-		timeEnd = func() bool {
+		timeIsOver = func() bool {
 			return false
 		}
 	}
@@ -101,7 +98,7 @@ func (take *Take[TValue]) Waiting(waitFor time.Duration, onWaiting func(*Take[TV
 
 		onWaiting(take)
 
-		if timeEnd() {
+		if timeIsOver() {
 			return
 		}
 
@@ -138,8 +135,6 @@ func (take *Take[TValue]) put(amount TValue) (taken TValue, full bool) {
 
 	take.finish(true)
 
-	take.successEvent.Trigger(take.taken)
-
 	return taken, true
 }
 
@@ -167,4 +162,6 @@ func (take *Take[TValue]) hasResult() bool {
 func (take *Take[TValue]) finish(success bool) {
 	take.element = nil
 	take.success = success
+
+	take.finishEvent.Trigger(take.taken)
 }
