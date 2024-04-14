@@ -8,19 +8,29 @@ import (
 )
 
 type Take[TValue valueConstraint] struct {
-	mtx         sync.Mutex
-	amount      *Amount[TValue]
-	element     *list.Element
-	finishEvent event.Event[TValue]
-	want        TValue
-	taken       TValue
-	success     bool
+	mtx       sync.Mutex
+	amount    *Amount[TValue]
+	element   *list.Element
+	fullEvent event.Event[TValue]
+	want      TValue
+	taken     TValue
 }
 
-func (take *Take[TValue]) Want() TValue {
+func (take *Take[TValue]) IsActive() bool {
 	take.mtx.Lock()
 	defer take.mtx.Unlock()
 
+	return take.isActive()
+}
+
+func (take *Take[TValue]) IsFull() bool {
+	take.mtx.Lock()
+	defer take.mtx.Unlock()
+
+	return take.isFull()
+}
+
+func (take *Take[TValue]) Want() TValue {
 	return take.want
 }
 
@@ -38,11 +48,11 @@ func (take *Take[TValue]) Taken() TValue {
 	return take.taken
 }
 
-func (take *Take[TValue]) OnFinish(subscriber event.Subscriber[TValue]) {
+func (take *Take[TValue]) OnFull(subscriber event.Subscriber[TValue]) {
 	take.mtx.Lock()
 
-	if !take.hasResult() {
-		take.finishEvent.On(subscriber)
+	if take.isActive() {
+		take.fullEvent.On(subscriber)
 
 		take.mtx.Unlock()
 
@@ -51,73 +61,61 @@ func (take *Take[TValue]) OnFinish(subscriber event.Subscriber[TValue]) {
 
 	take.mtx.Unlock()
 
-	subscriber(take.taken)
+	if take.isFull() {
+		go subscriber(take.taken)
+
+		return
+	}
 }
 
 func (take *Take[TValue]) WaitChan() <-chan struct{} {
-	finished := make(chan struct{})
+	waitChan := make(chan struct{})
 
-	if take.IsFinished() {
-		close(finished)
+	take.mtx.Lock()
 
-		return finished
-	}
-
-	take.OnFinish(func(_ TValue) {
-		close(finished)
-	})
-
-	return finished
-}
-
-func (take *Take[TValue]) Waiting(waitFor time.Duration, onWaiting func(*Take[TValue]), interval time.Duration) {
-	var timeIsOver func() bool
-
-	if waitFor >= 0 {
-		end := time.Now().Add(waitFor)
-
-		timeIsOver = func() bool {
-			return !time.Now().Before(end)
-		}
-	} else {
-		timeIsOver = func() bool {
-			return false
-		}
-	}
-
-	for {
-		take.mtx.Lock()
-
-		if take.hasResult() {
-			take.mtx.Unlock()
-
-			return
-		}
-
+	if !take.isActive() {
 		take.mtx.Unlock()
 
-		onWaiting(take)
+		close(waitChan)
 
-		if timeIsOver() {
+		return waitChan
+	}
+
+	take.mtx.Unlock()
+
+	take.OnFull(func(_ TValue) {
+		close(waitChan)
+	})
+
+	return waitChan
+}
+
+func (take *Take[TValue]) Wait(waitFor time.Duration, onWaiting func(), interval time.Duration) {
+	take.mtx.Lock()
+
+	if !take.isActive() || take.isFull() {
+		take.mtx.Unlock()
+
+		return
+	}
+
+	take.mtx.Unlock()
+
+	timeChan := time.After(waitFor)
+	waitChan := take.WaitChan()
+
+	for {
+		select {
+		case <-timeChan:
 			return
+		case <-waitChan:
+			return
+		default:
+			onWaiting()
 		}
 
 		time.Sleep(interval)
 	}
-}
-
-func (take *Take[TValue]) IsFinished() bool {
-	take.mtx.Lock()
-	defer take.mtx.Unlock()
-
-	return take.hasResult()
-}
-
-func (take *Take[TValue]) IsSuccess() bool {
-	take.mtx.Lock()
-	defer take.mtx.Unlock()
-
-	return take.success
 }
 
 func (take *Take[TValue]) put(amount TValue) (taken TValue, full bool) {
@@ -146,18 +144,20 @@ func makeWaitingTake[TValue valueConstraint](amount *Amount[TValue], taken TValu
 
 func makeSuccessTake[TValue valueConstraint](amount *Amount[TValue], want TValue) *Take[TValue] {
 	return &Take[TValue]{
-		amount:  amount,
-		want:    want,
-		taken:   want,
-		success: true,
+		amount: amount,
+		want:   want,
+		taken:  want,
 	}
 }
 
-func (take *Take[TValue]) hasResult() bool {
-	return nil == take.element
+func (take *Take[TValue]) isActive() bool {
+	return nil != take.element
 }
 
-func (take *Take[TValue]) finish(success bool) {
+func (take *Take[TValue]) isFull() bool {
+	return take.want == take.taken
+}
+
+func (take *Take[TValue]) finish() {
 	take.element = nil
-	take.success = success
 }

@@ -5,27 +5,18 @@ import (
 	"sync"
 )
 
-type IAmount[TValue valueConstraint] interface {
-	sync.Locker
-	Available() TValue
-	Full() TValue
-	Take(value TValue) *Take[TValue]
-	FinishTake(take *Take[TValue]) (success bool)
-	TakeIfEnough(value TValue) (amountTaken TValue)
-	TakeAsMuch(value TValue) (amountTaken TValue)
-	TakeForce(value TValue) TValue
-	Change(value TValue)
-	Put(value TValue) TValue
-}
-
 type Amount[TValue valueConstraint] struct {
 	sync.Mutex
-	value        TValue
-	waitingTakes list.List
+	value       TValue
+	activeTakes list.List
 }
 
 type valueConstraint interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~float32 | ~float64
+}
+
+func (a *Amount[TValue]) Amount() *Amount[TValue] {
+	return a
 }
 
 func (a *Amount[TValue]) Available() TValue {
@@ -35,8 +26,12 @@ func (a *Amount[TValue]) Available() TValue {
 func (a *Amount[TValue]) Full() TValue {
 	value := a.value
 
-	for it := a.waitingTakes.Front(); it != nil; it = it.Next() {
-		value += it.Value.(*Take[TValue]).taken
+	for it := a.activeTakes.Front(); it != nil; it = it.Next() {
+		take := it.Value.(*Take[TValue])
+
+		take.mtx.Lock()
+		value += take.taken
+		take.mtx.Unlock()
 	}
 
 	return value
@@ -63,37 +58,45 @@ func (a *Amount[TValue]) Take(value TValue) *Take[TValue] {
 
 	if a.value > 0 {
 		amountTaken = a.value
+		a.value = 0
 	}
 
 	take := makeWaitingTake[TValue](a, amountTaken, value)
 
-	take.element = a.waitingTakes.PushBack(take)
-
-	a.value = 0
+	take.element = a.activeTakes.PushBack(take)
 
 	return take
 }
 
-func (a *Amount[TValue]) FinishTake(take *Take[TValue]) (success bool) {
+func (a *Amount[TValue]) CancelTake(take *Take[TValue]) {
 	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-	if take.hasResult() {
-		take.mtx.Unlock()
-
-		return take.success
+	if a != take.amount || !take.isActive() {
+		return
 	}
 
 	a.value += take.taken
-	a.waitingTakes.Remove(take.element)
+	a.activeTakes.Remove(take.element)
 
-	take.taken = 0
-	take.finish(false)
+	take.finish()
 
-	take.mtx.Unlock()
+	return
+}
 
-	take.finishEvent.Trigger(0)
+func (a *Amount[TValue]) AcceptTake(take *Take[TValue]) {
+	take.mtx.Lock()
+	defer take.mtx.Unlock()
 
-	return false
+	if a != take.amount || !take.isActive() {
+		return
+	}
+
+	a.activeTakes.Remove(take.element)
+
+	take.finish()
+
+	return
 }
 
 func (a *Amount[TValue]) TakeIfEnough(value TValue) (amountTaken TValue) {
@@ -139,7 +142,7 @@ func (a *Amount[TValue]) TakeAsMuch(value TValue) (amountTaken TValue) {
 		return
 	}
 
-	a.value -= value
+	a.value = newAmount
 
 	return value
 }
@@ -189,13 +192,13 @@ func (a *Amount[TValue]) Put(value TValue) TValue {
 }
 
 func (a *Amount[TValue]) put(value TValue) TValue {
-	if a.waitingTakes.Len() == 0 {
+	if a.activeTakes.Len() == 0 {
 		a.value += value
 
 		return value
 	}
 
-	it := a.waitingTakes.Front()
+	it := a.activeTakes.Front()
 	amountLeft := value
 
 	for it != nil {
@@ -203,37 +206,30 @@ func (a *Amount[TValue]) put(value TValue) TValue {
 
 		take.mtx.Lock()
 
-		if take.hasResult() {
-			take.mtx.Unlock()
-
+		if take.isFull() {
 			it = it.Next()
+
+			take.mtx.Unlock()
 
 			continue
 		}
 
 		amountTaken, full := take.put(amountLeft)
+		take.mtx.Unlock()
 
 		if !full {
-			take.mtx.Unlock()
-
 			return value
 		}
 
+		go take.fullEvent.Trigger(take.taken)
+
 		amountLeft -= amountTaken
-
-		a.waitingTakes.Remove(take.element)
-
-		take.finish(true)
-
-		take.mtx.Unlock()
-
-		take.finishEvent.Trigger(take.taken)
 
 		if 0 == amountLeft {
 			return value
 		}
 
-		it = a.waitingTakes.Front()
+		it = a.activeTakes.Front()
 	}
 
 	a.value += amountLeft
