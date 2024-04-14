@@ -42,9 +42,9 @@ func (take *Take[TValue]) OnFinish(subscriber event.Subscriber[TValue]) {
 	take.mtx.Lock()
 
 	if !take.hasResult() {
-		take.mtx.Unlock()
-
 		take.finishEvent.On(subscriber)
+
+		take.mtx.Unlock()
 
 		return
 	}
@@ -133,8 +133,6 @@ func (take *Take[TValue]) put(amount TValue) (taken TValue, full bool) {
 
 	take.taken = take.want
 
-	take.finish(true)
-
 	return taken, true
 }
 
@@ -162,6 +160,4 @@ func (take *Take[TValue]) hasResult() bool {
 func (take *Take[TValue]) finish(success bool) {
 	take.element = nil
 	take.success = success
-
-	take.finishEvent.Trigger(take.taken)
 }

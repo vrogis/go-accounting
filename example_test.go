@@ -11,6 +11,10 @@ func ExampleAmount_Take() {
 
 	take := amount.Take(100)
 
+	take.OnFinish(func(taken int) {
+		fmt.Println(taken)
+	})
+
 	amount.Put(80)
 
 	fmt.Println(take.Left())
@@ -29,6 +33,7 @@ func ExampleAmount_Take() {
 	// 80
 	// 0
 	// 80
+	// 100
 	// 5
 	// 5
 	// 100

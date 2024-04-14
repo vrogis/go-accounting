@@ -76,21 +76,22 @@ func (a *Amount[TValue]) Take(value TValue) *Take[TValue] {
 
 func (a *Amount[TValue]) FinishTake(take *Take[TValue]) (success bool) {
 	take.mtx.Lock()
-	defer take.mtx.Unlock()
 
 	if take.hasResult() {
+		take.mtx.Unlock()
+
 		return take.success
 	}
 
-	element := take.element
-	taken := take.taken
-
-	take.finish(false)
+	a.value += take.taken
+	a.waitingTakes.Remove(take.element)
 
 	take.taken = 0
+	take.finish(false)
 
-	a.waitingTakes.Remove(element)
-	a.value += taken
+	take.mtx.Unlock()
+
+	take.finishEvent.Trigger(0)
 
 	return false
 }
@@ -210,7 +211,6 @@ func (a *Amount[TValue]) put(value TValue) TValue {
 			continue
 		}
 
-		element := take.element
 		amountTaken, full := take.put(amountLeft)
 
 		if !full {
@@ -221,9 +221,13 @@ func (a *Amount[TValue]) put(value TValue) TValue {
 
 		amountLeft -= amountTaken
 
-		a.waitingTakes.Remove(element)
+		a.waitingTakes.Remove(take.element)
+
+		take.finish(true)
 
 		take.mtx.Unlock()
+
+		take.finishEvent.Trigger(take.taken)
 
 		if 0 == amountLeft {
 			return value
