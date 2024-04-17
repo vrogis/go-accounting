@@ -59,13 +59,11 @@ func (take *Take[TValue]) OnFull(subscriber event.Subscriber[TValue]) {
 		return
 	}
 
-	take.mtx.Unlock()
-
 	if take.isFull() {
 		go subscriber(take.taken)
-
-		return
 	}
+
+	take.mtx.Unlock()
 }
 
 func (take *Take[TValue]) WaitChan() <-chan struct{} {
@@ -73,7 +71,7 @@ func (take *Take[TValue]) WaitChan() <-chan struct{} {
 
 	take.mtx.Lock()
 
-	if !take.isActive() {
+	if !take.isActive() || take.isFull() {
 		take.mtx.Unlock()
 
 		close(waitChan)
@@ -81,11 +79,11 @@ func (take *Take[TValue]) WaitChan() <-chan struct{} {
 		return waitChan
 	}
 
-	take.mtx.Unlock()
-
-	take.OnFull(func(_ TValue) {
+	take.fullEvent.On(func(_ TValue) {
 		close(waitChan)
 	})
+
+	take.mtx.Unlock()
 
 	return waitChan
 }
