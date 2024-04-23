@@ -30,7 +30,7 @@ func ExampleAmount_Take() {
 		wg.Done()
 	}()
 
-	amount.Put(80)
+	amount.Put(180)
 
 	fmt.Printf("1) take.Left(): %d\n", take.Left())
 	fmt.Printf("2) take.Taken(): %d\n", take.Taken())
@@ -77,16 +77,16 @@ func ExampleAmount_Take() {
 	// 0) take.OnFull2: 100
 	// 1) take.Left(): 20
 	// 2) take.Taken(): 80
-	// 3) amount.Available(): -100
-	// 4) amount.Full(): -20
-	// 5) amount.Available(): -95
-	// 6) amount.Full(): 5
+	// 3) amount.Available(): 0
+	// 4) amount.Full(): 80
+	// 5) amount.Available(): 5
+	// 6) amount.Full(): 105
 	// 7) take.Taken(): 100
 	// 8) take.OnFull: 100
-	// 9) amount.Available(): -95
-	// 10) amount.Full(): -95
-	// 11) amount.Available(): -95
-	// 12) amount.Full(): -95
+	// 9) amount.Available(): 5
+	// 10) amount.Full(): 5
+	// 11) amount.Available(): 0
+	// 12) amount.Full(): 5
 	// 13) take2.Left(): 0
 	// 14) take2.Taken(): 50
 	// 15) take2.IsActive(): true

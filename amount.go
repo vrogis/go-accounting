@@ -198,8 +198,20 @@ func (a *Amount[TValue]) put(value TValue) TValue {
 		return value
 	}
 
-	it := a.activeTakes.Front()
 	amountLeft := value
+
+	if a.value < 0 {
+		a.value += value
+
+		if a.value <= 0 {
+			return value
+		}
+
+		amountLeft = a.value
+		a.value = 0
+	}
+
+	it := a.activeTakes.Front()
 
 	for it != nil {
 		take := it.Value.(*Take[TValue])
