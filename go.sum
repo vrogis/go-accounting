@@ -2,3 +2,5 @@ github.com/vrogis/go-event v0.0.1 h1:w1oY1XdaIapLUU8FqccDCMCTJr+Uojpenw7nRk9u1QA
 github.com/vrogis/go-event v0.0.1/go.mod h1:JUKACylnOwhmcYqkCLlNuK6SOvT2MKqq4EB4YLKo6CI=
 github.com/vrogis/go-lock v0.0.3-0.20230913072445-b8a499079a70 h1:J2q9RD2h6d0KT1FuZKnAEY+NlaWKGwQYxS9zniw6jso=
 github.com/vrogis/go-lock v0.0.3-0.20230913072445-b8a499079a70/go.mod h1:1D5qAsL2+RlQVEBbf/mfdN/2sXE7C8Uvw1zejg0gMCY=
+github.com/vrogis/go-lock v0.0.3 h1:8KeZ1alm7f8xvvzQ/0Bw64Zcov9X72MMFmitA875aAI=
+github.com/vrogis/go-lock v0.0.3/go.mod h1:1D5qAsL2+RlQVEBbf/mfdN/2sXE7C8Uvw1zejg0gMCY=
